@@ -4,13 +4,23 @@ import joblib
 import requests
 import holidays
 from datetime import datetime
-import pytz
+import pytz # Para la zona horaria
+
 # =========================
-# CONFIGURACIÓN
+# 0. CONFIGURACIÓN
 # =========================
 API_KEY = "4975b6041755c654669c68ea111eed60"
 CIUDAD = "Lima,PE"
 
+# Valores MODALES O TÍPICOS para variables que el usuario ya no ingresa
+# Estos deben ser valores comunes que el modelo RF aprendió a manejar.
+MODAL_DEFAULTS = {
+    "n_carriles": 3,
+    "tipo_via": "Avenida",
+    "tipo_evento": "Ninguno"
+}
+
+# Cargar modelo y columnas
 try:
     modelo = joblib.load("modelo_trafico.pkl")
     columnas = joblib.load("columnas.pkl")
@@ -18,30 +28,31 @@ except FileNotFoundError:
     st.error("Error: No se encuentran los archivos .pkl. Ejecuta primero 'trafico1.py'.")
     st.stop()
 
-st.title("🚦 Predicción de Tráfico Inteligente")
-st.write("Sistema con IA y datos en tiempo real (Clima + Feriados Perú)")
 
 # =========================
-# 1. OBTENER DATOS REALES (Clima y Fecha)
+# 1. OBTENER DATOS Y TIEMPO REAL
 # =========================
-st.sidebar.header("Estado Actual (Lima)")
 
-# Definir la zona horaria de Lima
+# --- A) Manejo de Tiempo y Feriados (Lima) ---
 zona_lima = pytz.timezone('America/Lima')
-# Obtener la hora actual del servidor y convertirla a Lima
-hoy = datetime.now(zona_lima) 
+hoy = datetime.now(zona_lima)
+hora_actual = hoy.hour
+dia_semana_actual = hoy.strftime('%A') # Obtiene el nombre del día
 
-# A) Detectar si hoy es feriado
 pe_holidays = holidays.PE()
-# ... (el resto del código sigue igual) ...
-
-
-es_feriado_hoy = 1 if hoy in pe_holidays else 0
+es_feriado_hoy = 1 if hoy.date() in pe_holidays else 0
 etiqueta_feriado = "SI" if es_feriado_hoy == 1 else "NO"
 
-st.sidebar.info(f"📅 ¿Es Feriado?: **{etiqueta_feriado}**")
+# Clasificar turno (misma lógica que en el entrenamiento)
+def clasificar_turno(h):
+    if 6 <= h < 12: return 'Mañana'
+    elif 12 <= h < 18: return 'Tarde'
+    elif 18 <= h < 22: return 'Noche'
+    else: return 'Madrugada'
 
-# B) Obtener Clima
+turno_actual = clasificar_turno(hora_actual)
+
+# --- B) Obtener Clima desde API ---
 def obtener_clima():
     url = f"http://api.openweathermap.org/data/2.5/weather?q={CIUDAD}&appid={API_KEY}&lang=es"
     try:
@@ -55,97 +66,89 @@ def obtener_clima():
             elif "claro" in desc or "sol" in desc: return "Despejado"
             else: return "Desconocido"
         return "Desconocido"
-    except:
+    except Exception as e:
         return "Desconocido"
 
 clima_actual = obtener_clima()
+
+
+# =========================
+# 2. INTERFAZ (REDSEÑADA)
+# =========================
+st.title("🚨 Monitor de Congestión en Tiempo Real")
+st.markdown("---")
+
+col_hora, col_dia = st.columns(2)
+
+with col_hora:
+    st.header(f"{hora_actual}:00 hrs")
+    st.subheader(turno_actual)
+with col_dia:
+    st.markdown(f"**Día de la Semana:** {dia_semana_actual}")
+    st.markdown(f"**Vía Típica (Modo):** {MODAL_DEFAULTS['tipo_via']} ({MODAL_DEFAULTS['n_carriles']} Carriles)")
+
+
+st.sidebar.header("Estado Actual (Lima)")
+st.sidebar.info(f"📅 ¿Es Feriado?: **{etiqueta_feriado}**")
 st.sidebar.info(f"☁️ Clima: **{clima_actual}**")
 
-# =========================
-# 2 ENTRADA DEL USUARIO
-# =========================
-st.subheader("Configuración del Viaje")
-
-hora_actual = hoy.hour
-hora = st.slider("Hora del día", 0, 23, hora_actual)
-
-usar_datos_reales = st.checkbox("Usar clima y fecha automáticos", value=True)
-
-if usar_datos_reales:
-    condicion_clima = clima_actual
-    es_feriado_input = es_feriado_hoy
-    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    dia_semana = dias[hoy.weekday()]
-    st.caption(f"🔒 Datos fijos: {dia_semana}, {condicion_clima}, Feriado: {es_feriado_input}")
-else:
-    condicion_clima = st.selectbox("Condición del clima", ["Despejado", "Cielo cubierto", "Lluvia ligera", "Tormenta", "Desconocido"])
-    dia_semana = st.selectbox("Día de la semana", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"])
-    es_feriado_input = st.selectbox("¿Es Feriado?", [0, 1])
-
-col1, col2 = st.columns(2)
-with col1:
-    es_hora_pico = st.selectbox("¿Es hora pico?", [0, 1])
-    n_carriles = st.number_input("N° Carriles", 1, 10, 3)
-with col2:
-    tipo_evento = st.selectbox("Evento", ["Ninguno", "Accidente", "Obras", "Manifestación"])
-    tipo_via = st.selectbox("Tipo de vía", ["Avenida", "Calle", "Jirón", "Autopista"])
 
 # =========================
-# 3. PROCESAMIENTO DE DATOS
+# 3. PROCESAMIENTO DE DATOS (CON VALORES FIJOS)
 # =========================
-def clasificar_turno(h):
-    if 6 <= h < 12: return 'Mañana'
-    elif 12 <= h < 18: return 'Tarde'
-    elif 18 <= h < 22: return 'Noche'
-    else: return 'Madrugada'
 
-turno = clasificar_turno(hora)
+# Las horas pico se basan en la lógica de turnos (6-10am y 5-8pm)
+es_hora_pico_actual = 1 if (6 <= hora_actual <= 10) or (17 <= hora_actual <= 20) else 0
 
-
+# Crear DataFrame con TODAS las columnas (usando datos reales + modales)
 entrada = pd.DataFrame([{
-    "hora": hora,
-    "es_hora_pico": es_hora_pico,
-    "n_carriles": n_carriles,
-    "condicion_clima": condicion_clima,
-    "tipo_evento": tipo_evento,
-    "dia_semana": dia_semana,
-    "tipo_via": tipo_via,
-    "turno": turno,
-    "es_feriado": es_feriado_input
+    "hora": hora_actual,
+    "es_hora_pico": es_hora_pico_actual,
+    "n_carriles": MODAL_DEFAULTS["n_carriles"],
+    "condicion_clima": clima_actual,
+    "tipo_evento": MODAL_DEFAULTS["tipo_evento"],
+    "dia_semana": dia_semana_actual,
+    "tipo_via": MODAL_DEFAULTS["tipo_via"],
+    "turno": turno_actual,
+    "es_feriado": es_feriado_hoy
 }])
 
-
+# One-hot encoding y alineación con columnas de entrenamiento
 entrada_dummies = pd.get_dummies(entrada)
 entrada_dummies = entrada_dummies.reindex(columns=columnas, fill_value=0)
 
+
 # =========================
-# 4. PREDICCIÓN
+# 4. PREDICCIÓN AUTOMÁTICA
 # =========================
+
+# Se predice automáticamente al cargar la página, sin botón
+pred = modelo.predict(entrada_dummies)[0]
+prob = modelo.predict_proba(entrada_dummies).max() * 100
+
+# Colores y mensajes
+color = "🔴" if pred == "ALTO" else "🟠" if pred == "MODERADO" else "🟢"
+
 st.markdown("---")
-if st.button("🔮 Predecir Congestión") or usar_datos_reales:
-    
-    # predicción
-    pred = modelo.predict(entrada_dummies)[0]
-    prob = modelo.predict_proba(entrada_dummies).max() * 100
-    
-    # colores y mensajes
-    color = "🔴" if pred == "ALTO" else "🟠" if pred == "MODERADO" else "🟢"
-    
-    st.subheader(f"Resultado: {color} {pred}")
-    st.write(f"Probabilidad de acierto: **{prob:.2f}%**")
 
-    # gráfico 
-    probs_all = modelo.predict_proba(entrada_dummies)[0]
-    df_probs = pd.DataFrame({
-        "Nivel": modelo.classes_,
-        "Probabilidad": probs_all * 100
-    })
-    st.bar_chart(df_probs.set_index("Nivel"))
+# Muestra el resultado principal
+st.subheader(f"Resultado de Congestión: {color} {pred}")
+st.write(f"Probabilidad de acierto: **{prob:.2f}%**")
 
-    # final
-    if pred == "ALTO":
-        st.error("⚠️ Recomendación: Evita esta ruta o sal con mucha anticipación.")
-    elif pred == "MODERADO":
-        st.warning("⚠️ Recomendación: Tráfico regular, toma precauciones.")
-    else:
-        st.success("✅ Recomendación: Ruta despejada.")
+# Gráfico de probabilidades para transparencia
+st.markdown("##### 📈 Distribución de Probabilidades:")
+probs_all = modelo.predict_proba(entrada_dummies)[0]
+df_probs = pd.DataFrame({
+    "Nivel": modelo.classes_,
+    "Probabilidad": probs_all * 100
+})
+st.bar_chart(df_probs.set_index("Nivel"))
+
+# Recomendación final
+st.markdown("##### Recomendación de Viaje:")
+if pred == "ALTO":
+    st.error("⚠️ ALERTA CRÍTICA: Tráfico denso. Evita esta vía o reprograma tu viaje.")
+elif pred == "MODERADO":
+    st.warning("⚠️ PRECAUCIÓN: Tráfico regular, espera demoras.")
+else:
+    st.success("✅ VÍA DESPEJADA: Tránsito fluido. ¡Buen viaje!")
