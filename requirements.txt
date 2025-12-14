@@ -7,3 +7,4 @@ holidays
 matplotlib
 seaborn
 openpyxl
+pytz
