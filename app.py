@@ -22,13 +22,18 @@ st.title("🚦 Predicción de Tráfico Inteligente")
 st.write("Sistema con IA y datos en tiempo real (Clima + Feriados Perú)")
 
 # =========================
-# 1 OBTENER DATOS REALES
+# 1. OBTENER DATOS REALES (Clima y Fecha)
 # =========================
 st.sidebar.header("Estado Actual (Lima)")
 
-#Detectar si hoy es feriado
-hoy = datetime.now()
+# Definir la zona horaria de Lima
+zona_lima = pytz.timezone('America/Lima')
+# Obtener la hora actual del servidor y convertirla a Lima
+hoy = datetime.now(zona_lima) 
+
+# A) Detectar si hoy es feriado
 pe_holidays = holidays.PE()
+# ... (el resto del código sigue igual) ...
 
 
 es_feriado_hoy = 1 if hoy in pe_holidays else 0
